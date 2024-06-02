@@ -30,7 +30,7 @@ def get_shipping_data(company):
 '''
 
 # Company selection dropdown
-companies = ['Sayatva', 'Sri Energy', 'WOM', 'Parveen', 'JVS']
+companies = ['Sri Energy', 'Sayatva', 'WOM', 'Parveen', 'JVS']
 selected_company = st.selectbox('Select Company:', companies)
 
 # Display the selected company name
