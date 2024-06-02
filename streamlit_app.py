@@ -2,150 +2,191 @@ import streamlit as st
 import pandas as pd
 import math
 from pathlib import Path
+import plotly.express as px
 
 # Set the title and favicon that appear in the Browser's tab bar.
 st.set_page_config(
-    page_title='GDP Dashboard',
-    page_icon=':earth_americas:', # This is an emoji shortcode. Could be a URL too.
+    page_title='Shipping Data Dashboard',
+    page_icon=':ship:', # This is an emoji shortcode. Could be a URL too.
 )
 
 # -----------------------------------------------------------------------------
 # Declare some useful functions.
 
 @st.cache_data
-def get_gdp_data():
-    """Grab GDP data from a CSV file.
-
-    This uses caching to avoid having to read the file every time. If we were
-    reading from an HTTP endpoint instead of a file, it's a good idea to set
-    a maximum age to the cache with the TTL argument: @st.cache_data(ttl='1d')
+def get_shipping_data(company):
+    """Grab shipping data from a CSV file based on the selected company.
     """
-
-    # Instead of a CSV on disk, you could read from an HTTP endpoint here too.
-    DATA_FILENAME = Path(__file__).parent/'data/gdp_data.csv'
-    raw_gdp_df = pd.read_csv(DATA_FILENAME)
-
-    MIN_YEAR = 1960
-    MAX_YEAR = 2022
-
-    # The data above has columns like:
-    # - Country Name
-    # - Country Code
-    # - [Stuff I don't care about]
-    # - GDP for 1960
-    # - GDP for 1961
-    # - GDP for 1962
-    # - ...
-    # - GDP for 2022
-    #
-    # ...but I want this instead:
-    # - Country Name
-    # - Country Code
-    # - Year
-    # - GDP
-    #
-    # So let's pivot all those year-columns into two: Year and GDP
-    gdp_df = raw_gdp_df.melt(
-        ['Country Code'],
-        [str(x) for x in range(MIN_YEAR, MAX_YEAR + 1)],
-        'Year',
-        'GDP',
-    )
-
-    # Convert years from string to integers
-    gdp_df['Year'] = pd.to_numeric(gdp_df['Year'])
-
-    return gdp_df
-
-gdp_df = get_gdp_data()
+    DATA_FILENAME = Path(__file__).parent/f'data/{company}.csv'
+    shipping_df = pd.read_csv(DATA_FILENAME, parse_dates=['ARRIVAL DATE'], dayfirst=True)
+    return shipping_df
 
 # -----------------------------------------------------------------------------
 # Draw the actual page
 
 # Set the title that appears at the top of the page.
 '''
-# :earth_americas: GDP Dashboard
-
-Browse GDP data from the [World Bank Open Data](https://data.worldbank.org/) website. As you'll
-notice, the data only goes to 2022 right now, and datapoints for certain years are often missing.
-But it's otherwise a great (and did I mention _free_?) source of data.
+# :ship: Shipping Data Dashboard
 '''
 
-# Add some spacing
-''
-''
+# Company selection dropdown
+companies = ['Sayatva', 'Sri Energy', 'WOM', 'Parveen', 'JVS']
+selected_company = st.selectbox('Select Company:', companies)
 
-min_value = gdp_df['Year'].min()
-max_value = gdp_df['Year'].max()
+# Display the selected company name
+st.write(f"**{selected_company}**")
 
-from_year, to_year = st.slider(
-    'Which years are you interested in?',
-    min_value=min_value,
-    max_value=max_value,
-    value=[min_value, max_value])
+# Load data based on the selected company
+shipping_df = get_shipping_data(selected_company)
 
-countries = gdp_df['Country Code'].unique()
+# Step 1: Date Range Picker
+min_date = shipping_df['ARRIVAL DATE'].min().date()
+max_date = shipping_df['ARRIVAL DATE'].max().date()
 
-if not len(countries):
-    st.warning("Select at least one country")
+st.sidebar.header('Filters')
+start_date = st.sidebar.date_input('Start Date', min_value=min_date, max_value=max_date, value=min_date)
+end_date = st.sidebar.date_input('End Date', min_value=min_date, max_value=max_date, value=max_date)
 
-selected_countries = st.multiselect(
-    'Which countries would you like to view?',
-    countries,
-    ['DEU', 'FRA', 'GBR', 'BRA', 'MEX', 'JPN'])
+filtered_df = shipping_df[(shipping_df['ARRIVAL DATE'].dt.date >= start_date) & (shipping_df['ARRIVAL DATE'].dt.date <= end_date)]
 
-''
-''
-''
-
-# Filter the data
-filtered_gdp_df = gdp_df[
-    (gdp_df['Country Code'].isin(selected_countries))
-    & (gdp_df['Year'] <= to_year)
-    & (from_year <= gdp_df['Year'])
-]
-
-st.header('GDP over time', divider='gray')
-
-''
-
-st.line_chart(
-    filtered_gdp_df,
-    x='Year',
-    y='GDP',
-    color='Country Code',
+# Step 2: Dropdown Menus for Filtering
+importers = list(filtered_df['IMPORTER NAME'].unique())
+selected_importers = st.sidebar.multiselect(
+    'Select importers:',
+    importers,
+    default=importers[:5]  # Default to the first 5 importers
 )
 
-''
-''
+importer_countries = ['All'] + list(filtered_df['IMPORTER COUNTRY'].unique())
+selected_importer_country = st.sidebar.selectbox('Importer Country', importer_countries)
 
+exporter_countries = ['All'] + list(filtered_df['COUNTRY OF ORIGIN'].unique())
+selected_exporter_country = st.sidebar.selectbox('Exporter Country', exporter_countries)
 
-first_year = gdp_df[gdp_df['Year'] == from_year]
-last_year = gdp_df[gdp_df['Year'] == to_year]
+if selected_importers:
+    filtered_df = filtered_df[filtered_df['IMPORTER NAME'].isin(selected_importers)]
+if selected_importer_country != 'All':
+    filtered_df = filtered_df[filtered_df['IMPORTER COUNTRY'] == selected_importer_country]
+if selected_exporter_country != 'All':
+    filtered_df = filtered_df[filtered_df['COUNTRY OF ORIGIN'] == selected_exporter_country]
 
-st.header(f'GDP in {to_year}', divider='gray')
+# Step 3: Top Importers
+top_importers = filtered_df.groupby('IMPORTER NAME')[['IMPORT VALUE CIF', 'IMPORT VALUE FOB']].sum()
+top_importers['TOTAL VALUE'] = top_importers['IMPORT VALUE CIF'].fillna(0) + top_importers['IMPORT VALUE FOB'].fillna(0)
+top_importers = top_importers.sort_values('TOTAL VALUE', ascending=False).head(10)
 
-''
+st.header('Top Importers by Value')
+fig = px.bar(top_importers, x=top_importers.index, y='TOTAL VALUE', color=top_importers.index,
+             labels={'IMPORTER NAME': 'Importer', 'TOTAL VALUE': 'Total Value'})
+fig.update_layout(showlegend=False)
+st.plotly_chart(fig)
 
-cols = st.columns(4)
+# Step 4: Top Products
+top_products = filtered_df.groupby('PRODUCT DETAILS')[['IMPORT VALUE CIF', 'IMPORT VALUE FOB']].sum()
+top_products['TOTAL VALUE'] = top_products['IMPORT VALUE CIF'].fillna(0) + top_products['IMPORT VALUE FOB'].fillna(0)
+top_products = top_products.sort_values('TOTAL VALUE', ascending=False).head(10)
 
-for i, country in enumerate(selected_countries):
-    col = cols[i % len(cols)]
+st.header('Top Products by Value')
+fig = px.bar(top_products, x=top_products.index, y='TOTAL VALUE', color=top_products.index,
+             labels={'PRODUCT DETAILS': 'Product', 'TOTAL VALUE': 'Total Value'})
+fig.update_layout(showlegend=False)
+st.plotly_chart(fig)
 
-    with col:
-        first_gdp = first_year[gdp_df['Country Code'] == country]['GDP'].iat[0] / 1000000000
-        last_gdp = last_year[gdp_df['Country Code'] == country]['GDP'].iat[0] / 1000000000
+# Step 5: Time-Series Analysis
+filtered_df['TOTAL VALUE'] = filtered_df['IMPORT VALUE CIF'].fillna(0) + filtered_df['IMPORT VALUE FOB'].fillna(0)
+time_series_df = filtered_df.groupby(pd.Grouper(key='ARRIVAL DATE', freq='ME'))['TOTAL VALUE'].sum().reset_index()
 
-        if math.isnan(first_gdp):
-            growth = 'n/a'
-            delta_color = 'off'
-        else:
-            growth = f'{last_gdp / first_gdp:,.2f}x'
-            delta_color = 'normal'
+st.header('Total Value Over Time')
+fig = px.line(time_series_df, x='ARRIVAL DATE', y='TOTAL VALUE',
+              labels={'ARRIVAL DATE': 'Date', 'TOTAL VALUE': 'Total Value'})
+st.plotly_chart(fig)
 
-        st.metric(
-            label=f'{country} GDP',
-            value=f'{last_gdp:,.0f}B',
-            delta=growth,
-            delta_color=delta_color
-        )
+# Step 6: Geographic Insights
+geo_df = filtered_df.groupby('IMPORTER COUNTRY')['TOTAL VALUE'].sum().reset_index()
+
+st.header('Total Value by Importer Country')
+fig = px.choropleth(geo_df, locations='IMPORTER COUNTRY', locationmode='country names',
+                    color='TOTAL VALUE', hover_name='IMPORTER COUNTRY', projection='natural earth',
+                    color_continuous_scale='Viridis', range_color=[0, geo_df['TOTAL VALUE'].max()])
+fig.update_layout(coloraxis_colorbar=dict(title='Total Value'))
+st.plotly_chart(fig)
+
+# Step 7: Quantity Analysis by Unit
+st.header('Quantity Analysis by Unit')
+
+quantity_units = ['PCS', 'NOS', 'SET', 'PKG', 'FTS', 'KGS', 'INC', 'METER', 'WDC']
+
+# Replace 'Pieces' with 'PCS' in the 'QUANTITY UNIT' column
+filtered_df['QUANTITY UNIT'] = filtered_df['QUANTITY UNIT'].replace('Pieces', 'PCS')
+
+selected_unit = st.selectbox('Select Unit:', quantity_units)
+
+unit_df = filtered_df[filtered_df['QUANTITY UNIT'] == selected_unit]
+if not unit_df.empty:
+    top_products_by_unit = unit_df.groupby('PRODUCT DETAILS')['QUANTITY'].sum().reset_index()
+    top_products_by_unit = top_products_by_unit.nlargest(5, 'QUANTITY')
+    fig = px.bar(top_products_by_unit, x='PRODUCT DETAILS', y='QUANTITY', color='PRODUCT DETAILS',
+                 labels={'PRODUCT DETAILS': 'Product', 'QUANTITY': f'Quantity in {selected_unit}'})
+    fig.update_layout(showlegend=False)
+    st.plotly_chart(fig)
+else:
+    st.write(f"No data available for the selected unit: {selected_unit}")
+# Step 8: Metrics and KPIs
+st.header('Metrics and KPIs')
+
+total_value = filtered_df['TOTAL VALUE'].sum()
+num_shipments = len(filtered_df)
+num_importers = len(filtered_df['IMPORTER NAME'].unique())
+
+col1, col2, col3 = st.columns(3)
+col1.metric('Total Value', f'{total_value:,.2f}')
+col2.metric('Number of Shipments', num_shipments)
+col3.metric('Number of Importers', num_importers)
+# Step 9: Searchable and Sortable Table
+st.header('Shipment Details')
+st.dataframe(filtered_df)
+
+# Step 10: Trend Analysis
+st.header('Trend Analysis')
+trend_df = filtered_df.groupby([pd.Grouper(key='ARRIVAL DATE', freq='ME'), 'PRODUCT DETAILS'])['TOTAL VALUE'].sum().reset_index()
+trend_df['PREV TOTAL VALUE'] = trend_df.groupby('PRODUCT DETAILS')['TOTAL VALUE'].shift(1)
+trend_df['GROWTH RATE'] = ((trend_df['TOTAL VALUE'] - trend_df['PREV TOTAL VALUE']) / trend_df['PREV TOTAL VALUE']) * 100
+trend_df = trend_df.dropna()
+
+top_growth_products = trend_df.groupby('PRODUCT DETAILS')['GROWTH RATE'].mean().nlargest(5).reset_index()
+
+fig = px.bar(top_growth_products, x='PRODUCT DETAILS', y='GROWTH RATE',
+             labels={'PRODUCT DETAILS': 'Product', 'GROWTH RATE': 'Average Growth Rate (%)'})
+st.plotly_chart(fig)
+
+# Step 11: Product Details Drill-Down
+st.header('Product Details')
+selected_product = st.selectbox('Select Product:', filtered_df['PRODUCT DETAILS'].unique())
+
+product_df = filtered_df[filtered_df['PRODUCT DETAILS'] == selected_product]
+total_value_product = product_df['TOTAL VALUE'].sum()
+total_quantity_product = product_df['QUANTITY'].sum()
+
+st.write(f"Total Value for {selected_product}: {total_value_product:,.2f}")
+st.write(f"Total Quantity for {selected_product}: {total_quantity_product:,.2f}")
+
+top_importers_product = product_df.groupby('IMPORTER NAME')['TOTAL VALUE'].sum().nlargest(5).reset_index()
+fig = px.bar(top_importers_product, x='IMPORTER NAME', y='TOTAL VALUE',
+             labels={'IMPORTER NAME': 'Importer', 'TOTAL VALUE': 'Total Value'})
+st.plotly_chart(fig)
+
+# Step 12: Importer Details Drill-Down
+st.header('Importer Details')
+selected_importer = st.selectbox('Select Importer:', filtered_df['IMPORTER NAME'].unique())
+
+importer_df = filtered_df[filtered_df['IMPORTER NAME'] == selected_importer]
+total_value_importer = importer_df['TOTAL VALUE'].sum()
+total_quantity_importer = importer_df['QUANTITY'].sum()
+
+st.write(f"Total Value for {selected_importer}: {total_value_importer:,.2f}")
+st.write(f"Total Quantity for {selected_importer}: {total_quantity_importer:,.2f}")
+
+top_products_importer = importer_df.groupby('PRODUCT DETAILS')['TOTAL VALUE'].sum().nlargest(5).reset_index()
+fig = px.bar(top_products_importer, x='PRODUCT DETAILS', y='TOTAL VALUE',
+             labels={'PRODUCT DETAILS': 'Product', 'TOTAL VALUE': 'Total Value'})
+st.plotly_chart(fig)
